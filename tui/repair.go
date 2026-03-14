@@ -944,7 +944,11 @@ func (c *anthropicClient) summarizeAnthropic(ctx context.Context, model, prompt 
 		return "", fmt.Errorf("marshal Anthropic request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(payload))
+	anthropicBaseURL := "https://api.anthropic.com"
+	if envBase := os.Getenv("ANTHROPIC_BASE_URL"); envBase != "" {
+		anthropicBaseURL = strings.TrimRight(envBase, "/")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicBaseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("build Anthropic request: %w", err)
 	}

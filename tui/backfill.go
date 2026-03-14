@@ -108,18 +108,6 @@ func runBackfillCommand(args []string) error {
 		return err
 	}
 
-	sessionPath, err := resolveBackfillSessionPath(paths.agentsDir, opts.agent, opts.sessionID)
-	if err != nil {
-		return err
-	}
-	messages, err := parseBackfillSessionFile(sessionPath)
-	if err != nil {
-		return err
-	}
-	if len(messages) == 0 {
-		return fmt.Errorf("session %s has no message rows to backfill", opts.sessionID)
-	}
-
 	db, err := openLCMDB(paths.lcmDBPath)
 	if err != nil {
 		return err
@@ -127,6 +115,41 @@ func runBackfillCommand(args []string) error {
 	defer db.Close()
 
 	ctx := context.Background()
+
+	// For recompact mode, skip file resolution if conversation already exists in DB
+	var sessionPath string
+	var messages []backfillMessage
+	if opts.recompact {
+		plan, planErr := inspectBackfillImportPlan(ctx, db, opts.sessionID)
+		if planErr == nil && plan.hasData {
+			// Session already imported — no need for the JSONL file
+			sessionPath = ""
+			messages = nil
+		} else {
+			// Not yet imported — fall through to normal file resolution
+			sessionPath, err = resolveBackfillSessionPath(paths.agentsDir, opts.agent, opts.sessionID)
+			if err != nil {
+				return err
+			}
+			messages, err = parseBackfillSessionFile(sessionPath)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		sessionPath, err = resolveBackfillSessionPath(paths.agentsDir, opts.agent, opts.sessionID)
+		if err != nil {
+			return err
+		}
+		messages, err = parseBackfillSessionFile(sessionPath)
+		if err != nil {
+			return err
+		}
+		if len(messages) == 0 {
+			return fmt.Errorf("session %s has no message rows to backfill", opts.sessionID)
+		}
+	}
+
 	input := backfillSessionInput{
 		agent:       opts.agent,
 		sessionID:   opts.sessionID,
@@ -443,6 +466,12 @@ func resolveBackfillSessionPath(agentsDir, agent, sessionID string) (string, err
 		if _, err := os.Stat(fallback); err == nil {
 			return fallback, nil
 		}
+	}
+	// Glob for topic-suffixed session files (e.g. {sessionID}-topic-*.jsonl)
+	globPattern := filepath.Join(agentsDir, agent, "sessions", normalizedSessionID+"-topic-*.jsonl")
+	matches, globErr := filepath.Glob(globPattern)
+	if globErr == nil && len(matches) > 0 {
+		return matches[0], nil
 	}
 	return "", fmt.Errorf("session file not found for agent %q session %q", agent, normalizedSessionID)
 }
